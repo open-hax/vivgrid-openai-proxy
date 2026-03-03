@@ -18,6 +18,11 @@ import {
   responsesToChatCompletion,
   shouldUseResponsesUpstream,
 } from "./lib/responses-compat.js";
+import {
+  chatRequestToMessagesRequest,
+  messagesToChatCompletion,
+  shouldUseMessagesUpstream,
+} from "./lib/messages-compat.js";
 
 interface ChatCompletionRequest {
   readonly model?: string;
@@ -105,12 +110,19 @@ export async function createApp(config: ProxyConfig): Promise<FastifyInstance> {
     }
 
     const requestedModel = typeof request.body.model === "string" ? request.body.model : "";
+    const useMessagesUpstream = shouldUseMessagesUpstream(requestedModel, config.messagesModelPrefixes);
     const useResponsesUpstream = shouldUseResponsesUpstream(requestedModel, config.responsesModelPrefixes);
-    const upstreamPath = useResponsesUpstream ? config.responsesPath : config.chatCompletionsPath;
+    const upstreamPath = useMessagesUpstream
+      ? config.messagesPath
+      : useResponsesUpstream
+        ? config.responsesPath
+        : config.chatCompletionsPath;
     const upstreamUrl = new URL(upstreamPath, `${config.upstreamBaseUrl}/`).toString();
-    const upstreamPayload = useResponsesUpstream
-      ? chatRequestToResponsesRequest(request.body)
-      : request.body;
+    const upstreamPayload = useMessagesUpstream
+      ? chatRequestToMessagesRequest(request.body)
+      : useResponsesUpstream
+        ? chatRequestToResponsesRequest(request.body)
+        : request.body;
     const bodyText = JSON.stringify(upstreamPayload);
     const clientWantsStream = request.body.stream === true;
 
@@ -199,17 +211,19 @@ export async function createApp(config: ProxyConfig): Promise<FastifyInstance> {
         continue;
       }
 
-      if (useResponsesUpstream && upstreamResponse.ok) {
-        let responsesJson: unknown;
+      if ((useResponsesUpstream || useMessagesUpstream) && upstreamResponse.ok) {
+        let upstreamJson: unknown;
         try {
-          responsesJson = await upstreamResponse.json();
+          upstreamJson = await upstreamResponse.json();
         } catch (error) {
           sawRequestError = true;
-          request.log.warn({ error: toErrorMessage(error) }, "failed to parse responses upstream JSON");
+          request.log.warn({ error: toErrorMessage(error) }, "failed to parse transformed upstream JSON");
           continue;
         }
 
-        const chatCompletion = responsesToChatCompletion(responsesJson, requestedModel);
+        const chatCompletion = useMessagesUpstream
+          ? messagesToChatCompletion(upstreamJson, requestedModel)
+          : responsesToChatCompletion(upstreamJson, requestedModel);
         if (clientWantsStream) {
           reply.code(200);
           reply.header("content-type", "text/event-stream; charset=utf-8");

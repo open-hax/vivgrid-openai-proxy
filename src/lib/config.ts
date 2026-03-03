@@ -5,6 +5,8 @@ export interface ProxyConfig {
   readonly port: number;
   readonly upstreamBaseUrl: string;
   readonly chatCompletionsPath: string;
+  readonly messagesPath: string;
+  readonly messagesModelPrefixes: readonly string[];
   readonly responsesPath: string;
   readonly responsesModelPrefixes: readonly string[];
   readonly keysFilePath: string;
@@ -75,6 +77,8 @@ export function loadConfig(cwd: string = process.cwd()): ProxyConfig {
     port: numberFromEnv("PROXY_PORT", 8787),
     upstreamBaseUrl,
     chatCompletionsPath: process.env.UPSTREAM_CHAT_COMPLETIONS_PATH ?? "/v1/chat/completions",
+    messagesPath: process.env.UPSTREAM_MESSAGES_PATH ?? "/v1/messages",
+    messagesModelPrefixes: csvFromEnv("UPSTREAM_MESSAGES_MODEL_PREFIXES", ["claude-"]),
     responsesPath: process.env.UPSTREAM_RESPONSES_PATH ?? "/v1/responses",
     responsesModelPrefixes: csvFromEnv("UPSTREAM_RESPONSES_MODEL_PREFIXES", ["gpt-"]),
     keysFilePath: filePathFromEnv("VIVGRID_KEYS_FILE", "./keys.json", cwd),

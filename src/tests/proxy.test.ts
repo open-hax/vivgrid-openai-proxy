@@ -72,6 +72,8 @@ async function withProxyApp(
     port: 0,
     upstreamBaseUrl: `http://127.0.0.1:${address.port}`,
     chatCompletionsPath: "/v1/chat/completions",
+    messagesPath: "/v1/messages",
+    messagesModelPrefixes: ["claude-"],
     responsesPath: "/v1/responses",
     responsesModelPrefixes: ["gpt-"],
     keysFilePath: keysPath,
@@ -566,6 +568,334 @@ test("returns synthetic chat-completion SSE for gpt stream requests", async () =
       assert.equal(response.headers["content-type"], "text/event-stream; charset=utf-8");
       assert.ok(response.body.includes("chat.completion.chunk"));
       assert.ok(response.body.includes("stream-via-responses"));
+      assert.ok(response.body.includes("data: [DONE]"));
+    }
+  );
+});
+
+test("routes claude chat requests to messages endpoint and maps response", async () => {
+  let observedPath = "";
+  let observedBody: unknown;
+
+  await withProxyApp(
+    {
+      keys: ["key-a"],
+      upstreamHandler: async (request, body) => {
+        observedPath = request.url ?? "";
+        observedBody = JSON.parse(body);
+
+        return {
+          status: 200,
+          headers: {
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({
+            id: "msg_claude_1",
+            model: "claude-opus-4-5-20251101",
+            role: "assistant",
+            type: "message",
+            content: [
+              {
+                type: "text",
+                text: "claude-mapped-ok"
+              }
+            ],
+            stop_reason: "end_turn",
+            usage: {
+              input_tokens: 11,
+              output_tokens: 7
+            }
+          })
+        };
+      }
+    },
+    async ({ app }) => {
+      const response = await app.inject({
+        method: "POST",
+        url: "/v1/chat/completions",
+        headers: {
+          "content-type": "application/json"
+        },
+        payload: {
+          model: "claude-opus-4-5",
+          messages: [
+            { role: "system", content: "You are terse" },
+            { role: "user", content: "hello", cache_control: { type: "ephemeral" } }
+          ],
+          stream: false
+        }
+      });
+
+      assert.equal(response.statusCode, 200);
+      assert.equal(observedPath, "/v1/messages");
+      assert.ok(isRecord(observedBody));
+      assert.equal(observedBody.model, "claude-opus-4-5");
+      assert.equal(observedBody.system, "You are terse");
+      assert.ok(Array.isArray(observedBody.messages));
+      assert.equal(observedBody.messages.length, 1);
+      assert.ok(isRecord(observedBody.messages[0]));
+      assert.equal(observedBody.messages[0].role, "user");
+      assert.equal(observedBody.messages[0].cache_control, undefined);
+
+      const payload: unknown = response.json();
+      assert.ok(isRecord(payload));
+      assert.equal(payload.object, "chat.completion");
+      assert.equal(payload.model, "claude-opus-4-5-20251101");
+      assert.ok(Array.isArray(payload.choices));
+      assert.ok(isRecord(payload.choices[0]));
+      assert.ok(isRecord(payload.choices[0].message));
+      assert.equal(payload.choices[0].message.content, "claude-mapped-ok");
+      assert.ok(isRecord(payload.usage));
+      assert.equal(payload.usage.prompt_tokens, 11);
+      assert.equal(payload.usage.completion_tokens, 7);
+      assert.equal(payload.usage.total_tokens, 18);
+    }
+  );
+});
+
+test("maps claude tool_use content to chat tool_calls", async () => {
+  let observedBody: unknown;
+
+  await withProxyApp(
+    {
+      keys: ["key-a"],
+      upstreamHandler: async (_request, body) => {
+        observedBody = JSON.parse(body);
+
+        return {
+          status: 200,
+          headers: {
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({
+            id: "msg_claude_2",
+            model: "claude-opus-4-5-20251101",
+            role: "assistant",
+            type: "message",
+            content: [
+              {
+                type: "tool_use",
+                id: "toolu_123",
+                name: "bash",
+                input: {
+                  command: "pwd"
+                }
+              }
+            ],
+            stop_reason: "tool_use",
+            usage: {
+              input_tokens: 22,
+              output_tokens: 9
+            }
+          })
+        };
+      }
+    },
+    async ({ app }) => {
+      const response = await app.inject({
+        method: "POST",
+        url: "/v1/chat/completions",
+        headers: {
+          "content-type": "application/json"
+        },
+        payload: {
+          model: "claude-opus-4-5",
+          messages: [{ role: "user", content: "run pwd" }],
+          tools: [
+            {
+              type: "function",
+              function: {
+                name: "bash",
+                description: "run shell command",
+                parameters: {
+                  type: "object",
+                  properties: {
+                    command: {
+                      type: "string"
+                    }
+                  },
+                  required: ["command"],
+                  additionalProperties: false
+                }
+              }
+            }
+          ],
+          tool_choice: "required",
+          stream: false
+        }
+      });
+
+      assert.equal(response.statusCode, 200);
+      assert.ok(isRecord(observedBody));
+      assert.ok(Array.isArray(observedBody.tools));
+      assert.ok(isRecord(observedBody.tools[0]));
+      assert.equal(observedBody.tools[0].name, "bash");
+      assert.ok(isRecord(observedBody.tool_choice));
+      assert.equal(observedBody.tool_choice.type, "any");
+
+      const payload: unknown = response.json();
+      assert.ok(isRecord(payload));
+      assert.ok(Array.isArray(payload.choices));
+      assert.ok(isRecord(payload.choices[0]));
+      assert.equal(payload.choices[0].finish_reason, "tool_calls");
+      assert.ok(isRecord(payload.choices[0].message));
+      assert.equal(payload.choices[0].message.content, null);
+      assert.ok(Array.isArray(payload.choices[0].message.tool_calls));
+      assert.ok(isRecord(payload.choices[0].message.tool_calls[0]));
+      assert.equal(payload.choices[0].message.tool_calls[0].id, "toolu_123");
+      assert.ok(isRecord(payload.choices[0].message.tool_calls[0].function));
+      assert.equal(payload.choices[0].message.tool_calls[0].function.name, "bash");
+      assert.equal(payload.choices[0].message.tool_calls[0].function.arguments, "{\"command\":\"pwd\"}");
+    }
+  );
+});
+
+test("maps assistant tool_calls + tool result transcript to messages format", async () => {
+  let observedBody: unknown;
+
+  await withProxyApp(
+    {
+      keys: ["key-a"],
+      upstreamHandler: async (_request, body) => {
+        observedBody = JSON.parse(body);
+
+        return {
+          status: 200,
+          headers: {
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({
+            id: "msg_claude_transcript",
+            model: "claude-opus-4-5-20251101",
+            role: "assistant",
+            type: "message",
+            content: [
+              {
+                type: "text",
+                text: "claude-transcript-ok"
+              }
+            ],
+            stop_reason: "end_turn",
+            usage: {
+              input_tokens: 40,
+              output_tokens: 8
+            }
+          })
+        };
+      }
+    },
+    async ({ app }) => {
+      const response = await app.inject({
+        method: "POST",
+        url: "/v1/chat/completions",
+        headers: {
+          "content-type": "application/json"
+        },
+        payload: {
+          model: "claude-opus-4-5",
+          messages: [
+            {
+              role: "assistant",
+              content: "",
+              tool_calls: [
+                {
+                  id: "call_1",
+                  type: "function",
+                  function: {
+                    name: "bash",
+                    arguments: "{\"command\":\"pwd\"}"
+                  }
+                }
+              ]
+            },
+            {
+              role: "tool",
+              tool_call_id: "call_1",
+              content: "/tmp"
+            },
+            {
+              role: "user",
+              content: "continue"
+            }
+          ],
+          stream: false
+        }
+      });
+
+      assert.equal(response.statusCode, 200);
+      assert.ok(isRecord(observedBody));
+      assert.ok(Array.isArray(observedBody.messages));
+      assert.equal(observedBody.messages.length, 3);
+
+      assert.ok(isRecord(observedBody.messages[0]));
+      assert.equal(observedBody.messages[0].role, "assistant");
+      assert.ok(Array.isArray(observedBody.messages[0].content));
+      assert.ok(isRecord(observedBody.messages[0].content[0]));
+      assert.equal(observedBody.messages[0].content[0].type, "tool_use");
+      assert.equal(observedBody.messages[0].content[0].id, "call_1");
+      assert.equal(observedBody.messages[0].content[0].name, "bash");
+
+      assert.ok(isRecord(observedBody.messages[1]));
+      assert.equal(observedBody.messages[1].role, "user");
+      assert.ok(Array.isArray(observedBody.messages[1].content));
+      assert.ok(isRecord(observedBody.messages[1].content[0]));
+      assert.equal(observedBody.messages[1].content[0].type, "tool_result");
+      assert.equal(observedBody.messages[1].content[0].tool_use_id, "call_1");
+      assert.equal(observedBody.messages[1].content[0].content, "/tmp");
+
+      assert.ok(isRecord(observedBody.messages[2]));
+      assert.equal(observedBody.messages[2].role, "user");
+      assert.equal(observedBody.messages[2].content, "continue");
+    }
+  );
+});
+
+test("returns synthetic chat-completion SSE for claude stream requests", async () => {
+  await withProxyApp(
+    {
+      keys: ["key-a"],
+      upstreamHandler: async (_request) => ({
+        status: 200,
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          id: "msg_claude_stream",
+          model: "claude-opus-4-5-20251101",
+          role: "assistant",
+          type: "message",
+          content: [
+            {
+              type: "text",
+              text: "claude-stream-chat-ok"
+            }
+          ],
+          stop_reason: "end_turn",
+          usage: {
+            input_tokens: 12,
+            output_tokens: 8
+          }
+        })
+      })
+    },
+    async ({ app }) => {
+      const response = await app.inject({
+        method: "POST",
+        url: "/v1/chat/completions",
+        headers: {
+          "content-type": "application/json"
+        },
+        payload: {
+          model: "claude-opus-4-5",
+          messages: [{ role: "user", content: "hello" }],
+          stream: true
+        }
+      });
+
+      assert.equal(response.statusCode, 200);
+      assert.equal(response.headers["content-type"], "text/event-stream; charset=utf-8");
+      assert.ok(response.body.includes("chat.completion.chunk"));
+      assert.ok(response.body.includes("claude-stream-chat-ok"));
       assert.ok(response.body.includes("data: [DONE]"));
     }
   );
