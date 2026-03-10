@@ -6,7 +6,7 @@ OpenAI-compatible proxy server for VivGrid with automatic API key rotation.
 
 - `POST /v1/chat/completions` compatibility endpoint.
 - Model-aware upstream routing for Claude models: `claude-*` can be sent to VivGrid `POST /v1/messages` and converted back into chat-completions format.
-- Model-aware upstream routing: `gpt-*` models can be sent to VivGrid `POST /v1/responses` and converted back into chat-completions format.
+- Model-aware upstream routing: `gpt-*` and `glm-*` models can be sent to VivGrid `POST /v1/responses` and converted back into chat-completions format.
 - `GET /v1/models` and `GET /v1/models/:id` model listing.
 - Automatic key rotation when upstream returns rate limits (`429`, plus `403/503` with `retry-after`).
 - Key pool loaded from JSON file so you can maintain many upstream keys.
@@ -37,7 +37,7 @@ pnpm --filter @workspace/vivgrid-openai-proxy start
 - `UPSTREAM_MESSAGES_PATH` (default: `/v1/messages`)
 - `UPSTREAM_MESSAGES_MODEL_PREFIXES` (default: `claude-`; comma-separated prefixes)
 - `UPSTREAM_RESPONSES_PATH` (default: `/v1/responses`)
-- `UPSTREAM_RESPONSES_MODEL_PREFIXES` (default: `gpt-`; comma-separated prefixes)
+- `UPSTREAM_RESPONSES_MODEL_PREFIXES` (default: `gpt-,glm-`; comma-separated prefixes)
 - `VIVGRID_KEYS_FILE` (default: `./keys.json`)
 - `VIVGRID_MODELS_FILE` (default: `./models.json`)
 - `VIVGRID_KEY_RELOAD_MS` (default: `5000`)

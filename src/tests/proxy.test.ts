@@ -75,7 +75,7 @@ async function withProxyApp(
     messagesPath: "/v1/messages",
     messagesModelPrefixes: ["claude-"],
     responsesPath: "/v1/responses",
-    responsesModelPrefixes: ["gpt-"],
+    responsesModelPrefixes: ["gpt-", "glm-"],
     keysFilePath: keysPath,
     modelsFilePath: modelsPath,
     keyReloadMs: 50,
@@ -373,6 +373,76 @@ test("routes gpt chat requests to responses endpoint and maps response", async (
       assert.equal(payload.choices[0].message.content, "responses-route-ok");
       assert.ok(isRecord(payload.usage));
       assert.equal(payload.usage.total_tokens, 13);
+    }
+  );
+});
+
+test("routes glm chat requests to responses endpoint and maps response", async () => {
+  let observedPath = "";
+  let observedBody: unknown;
+
+  await withProxyApp(
+    {
+      keys: ["key-a"],
+      upstreamHandler: async (request, body) => {
+        observedPath = request.url ?? "";
+        observedBody = JSON.parse(body);
+
+        return {
+          status: 200,
+          headers: {
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({
+            id: "resp_glm",
+            object: "response",
+            created_at: 1772516801,
+            model: "glm-5",
+            output: [
+              {
+                id: "msg_glm",
+                type: "message",
+                role: "assistant",
+                content: [
+                  {
+                    type: "output_text",
+                    text: "glm-responses-route-ok"
+                  }
+                ]
+              }
+            ]
+          })
+        };
+      }
+    },
+    async ({ app }) => {
+      const response = await app.inject({
+        method: "POST",
+        url: "/v1/chat/completions",
+        headers: {
+          "content-type": "application/json"
+        },
+        payload: {
+          model: "glm-5",
+          messages: [{ role: "user", content: "hello" }],
+          stream: false
+        }
+      });
+
+      assert.equal(response.statusCode, 200);
+      assert.equal(observedPath, "/v1/responses");
+      assert.ok(isRecord(observedBody));
+      assert.equal(observedBody.model, "glm-5");
+      assert.ok(Array.isArray(observedBody.input));
+
+      const payload: unknown = response.json();
+      assert.ok(isRecord(payload));
+      assert.equal(payload.object, "chat.completion");
+      assert.equal(payload.model, "glm-5");
+      assert.ok(Array.isArray(payload.choices));
+      assert.ok(isRecord(payload.choices[0]));
+      assert.ok(isRecord(payload.choices[0].message));
+      assert.equal(payload.choices[0].message.content, "glm-responses-route-ok");
     }
   );
 });

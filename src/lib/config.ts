@@ -80,7 +80,7 @@ export function loadConfig(cwd: string = process.cwd()): ProxyConfig {
     messagesPath: process.env.UPSTREAM_MESSAGES_PATH ?? "/v1/messages",
     messagesModelPrefixes: csvFromEnv("UPSTREAM_MESSAGES_MODEL_PREFIXES", ["claude-"]),
     responsesPath: process.env.UPSTREAM_RESPONSES_PATH ?? "/v1/responses",
-    responsesModelPrefixes: csvFromEnv("UPSTREAM_RESPONSES_MODEL_PREFIXES", ["gpt-"]),
+    responsesModelPrefixes: csvFromEnv("UPSTREAM_RESPONSES_MODEL_PREFIXES", ["gpt-", "glm-"]),
     keysFilePath: filePathFromEnv("VIVGRID_KEYS_FILE", "./keys.json", cwd),
     modelsFilePath: filePathFromEnv("VIVGRID_MODELS_FILE", "./models.json", cwd),
     keyReloadMs: numberFromEnv("VIVGRID_KEY_RELOAD_MS", 5000),
